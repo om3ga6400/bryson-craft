@@ -1,5 +1,5 @@
 {
-  "atlas": "mc_atlas.png",
+  "atlas": "atlas.png",
   "tile_size": 16,
   "faces_per_block": 3,
   "texture_dir": "textures/block",

@@ -2056,7 +2056,7 @@ dependencies = [
 
 [[package]]
 name = "bryson-craft"
-version = "0.1.1"
+version = "1.0.0"
 dependencies = [
  "bevy",
  "bevy_voxel_world",

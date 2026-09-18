@@ -1,0 +1,14 @@
+{
+  "standing_half_extents": [0.3, 0.9, 0.3],
+  "crouching_half_extents": [0.3, 0.75, 0.3],
+  "eye_height": 0.62,
+  "crouch_eye_height": 0.45,
+  "reach": 6.0,
+  "walk_speed": 4.317,
+  "sprint_speed": 6.0,
+  "crouch_speed": 1.3,
+  "jump_speed": 9.0,
+  "gravity": -32.0,
+  "terminal_velocity": -60.0,
+  "collision_step": 0.1
+}

@@ -1,0 +1,9 @@
+{
+  "seed": 1337,
+  "scale": 0.02,
+  "height": 8.0,
+  "surface": 0,
+  "subsurface": 1,
+  "subsurface_layers": 3,
+  "underground": 2
+}

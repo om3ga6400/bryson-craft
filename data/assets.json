@@ -1,0 +1,24 @@
+{
+  "atlas": "mc_atlas.png",
+  "tile_size": 16,
+  "faces_per_block": 3,
+  "texture_dir": "textures/block",
+  "grass_tint": [145, 189, 89],
+  "grass_overlay_height": 4,
+  "crosshair_candidates": [
+    "textures/gui/sprites/hud/crosshair.png",
+    "textures/gui/crosshair.png"
+  ],
+  "break_stage_textures": [
+    "textures/block/destroy_stage_0.png",
+    "textures/block/destroy_stage_1.png",
+    "textures/block/destroy_stage_2.png",
+    "textures/block/destroy_stage_3.png",
+    "textures/block/destroy_stage_4.png",
+    "textures/block/destroy_stage_5.png",
+    "textures/block/destroy_stage_6.png",
+    "textures/block/destroy_stage_7.png",
+    "textures/block/destroy_stage_8.png",
+    "textures/block/destroy_stage_9.png"
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "default_mouse_sensitivity": 1.0,
+  "min_sensitivity": 0.2,
+  "max_sensitivity": 3.0,
+  "sensitivity_step": 0.2,
+  "default_render_distance": 12,
+  "min_render_distance": 4,
+  "max_render_distance": 24,
+  "render_distance_step": 2,
+  "default_fov": 90.0,
+  "min_fov": 60.0,
+  "max_fov": 120.0,
+  "fov_step": 5.0
+}

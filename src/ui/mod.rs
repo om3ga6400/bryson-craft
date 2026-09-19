@@ -45,7 +45,6 @@ pub struct Paused(pub bool);
 
 pub use crosshair::*;
 pub use cursor::*;
-pub use screens::loading::*;
 pub use screens::main::*;
 pub use screens::options::*;
 pub use screens::pause::*;

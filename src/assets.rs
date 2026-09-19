@@ -2,15 +2,9 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::Sender;
 
 use crate::data::{BlockDefinition, GameData};
-
-pub enum AssetProgress {
-    Extracting { current: usize, total: usize },
-    BuildingAtlas { current: usize, total: usize },
-    Finished { rebuilt: bool },
-}
+use serde_json::Value;
 
 pub fn assets_dir() -> PathBuf {
     project_root().join("assets")
@@ -21,139 +15,132 @@ pub fn minecraft_dir() -> PathBuf {
 }
 
 fn project_root() -> PathBuf {
-    std::env::var_os("BEVY_ASSET_ROOT")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("CARGO_MANIFEST_DIR").map(PathBuf::from))
-        .or_else(|| {
-            std::env::current_exe()
-                .ok()
-                .and_then(|exe| exe.parent().map(Path::to_path_buf))
-        })
-        .unwrap_or_else(|| PathBuf::from("."))
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
-pub fn resolve(candidates: &[String]) -> Option<String> {
-    let dir = assets_dir();
-    candidates
-        .iter()
-        .find(|path| dir.join(path).is_file())
-        .map(|path| path.to_string())
+pub fn assets_folder_exists() -> bool {
+    assets_dir().is_dir()
 }
 
-pub fn existing_assets_are_complete(data: &GameData) -> bool {
-    let dir = assets_dir();
-    dir.join(&data.assets.atlas).is_file()
-        && data
-            .assets
-            .break_stage_textures
-            .iter()
-            .all(|path| dir.join(path).is_file())
-        && data
-            .assets
-            .crosshair_candidates
-            .iter()
-            .any(|path| dir.join(path).is_file())
-        && data.blocks.iter().all(|block| {
-            [
-                top_candidates(block),
-                side_candidates(block),
-                bottom_candidates(block),
-            ]
-            .into_iter()
-            .all(|candidates| {
-                candidates.iter().any(|name| {
-                    dir.join(&data.assets.texture_dir)
-                        .join(format!("{name}.png"))
-                        .is_file()
-                })
-            })
-        })
-}
+pub fn ensure_assets(data: &GameData) {
+    let directory = assets_dir();
+    let assets_exist = directory.is_dir();
 
-pub fn ensure_atlas_exists() {
-    let data = GameData::load();
-    let atlas = assets_dir().join(&data.assets.atlas);
-    if !atlas.is_file() {
-        write_fallback_atlas(&atlas, &data);
+    if assets_exist {
+        tracing::info!("validating assets...");
+        let assets_valid = assets_are_complete(data);
+        tracing::info!(
+            "validate assets {}",
+            if assets_valid { "success" } else { "failure" }
+        );
+        if assets_valid {
+            return;
+        }
     }
+
+    tracing::info!("requesting jar...");
+    let jar = pick_jar();
+    let built = build_assets(&jar, &directory)
+        .map(|report| report.faces > 0)
+        .unwrap_or(false);
+    assert!(
+        built,
+        "Could not build assets from the selected Minecraft jar"
+    );
+
+    tracing::info!("validating assets...");
+    let assets_valid = assets_are_complete(data);
+    tracing::info!(
+        "validate assets {}",
+        if assets_valid { "success" } else { "failure" }
+    );
+    assert!(
+        assets_valid,
+        "Selected Minecraft jar did not provide all required assets"
+    );
 }
 
-pub fn pick_jar() -> Option<PathBuf> {
+fn assets_are_complete(data: &GameData) -> bool {
+    let directory = assets_dir();
+    let mut complete = validate_asset_file(&directory, &data.assets.atlas);
+
+    for path in &data.assets.break_stage_textures {
+        complete &= validate_asset_file(&directory, path);
+    }
+
+    complete &= validate_asset_file(&directory, &data.assets.crosshair);
+
+    for block in &data.blocks {
+        let model = format!("models/block/{}.json", block.name);
+        let block_valid = validate_asset_file(&directory, &model);
+        complete &= block_valid;
+    }
+
+    complete
+}
+
+fn validate_asset_file(assets_dir: &Path, relative: &str) -> bool {
+    let exists = assets_dir.join(relative).is_file();
+    if exists {
+        tracing::info!("validation success assets/{relative}");
+    } else {
+        tracing::error!("validation failure assets/{relative}");
+    }
+    exists
+}
+
+pub fn pick_jar() -> PathBuf {
     let picked = rfd::FileDialog::new()
         .set_title("Select your Minecraft Java Edition .jar")
         .add_filter("Minecraft jar", &["jar"])
-        .pick_file()?;
+        .pick_file()
+        .expect("Minecraft jar selection was cancelled");
 
-    fs::File::open(&picked)
-        .ok()
-        .and_then(|file| zip::ZipArchive::new(file).ok())?;
+    let file = fs::File::open(&picked).expect("Could not open selected Minecraft jar");
+    zip::ZipArchive::new(file).expect("Selected file is not a valid Minecraft jar");
 
-    Some(picked)
-}
-
-pub fn prepare_assets_with_progress(jar: Option<PathBuf>, progress: &Sender<AssetProgress>) {
-    let assets_dir = assets_dir();
-    let data = GameData::load();
-
-    let Some(jar) = jar else {
-        eprintln!("Minecraft jar not provided - using existing assets.");
-        let _ = progress.send(AssetProgress::Finished { rebuilt: false });
-        return;
-    };
-
-    match build_assets(&jar, &assets_dir, progress) {
-        Ok(report) if report.faces == 0 => {
-            eprintln!("No matching textures in that jar - using fallback colors.");
-            write_fallback_atlas(&assets_dir.join(&data.assets.atlas), &data);
-        }
-        Ok(report) => {
-            let Report { files, faces } = report;
-            let total_faces = data.blocks.len() * data.assets.faces_per_block as usize;
-            if faces == total_faces {
-                println!("Using Minecraft assets ({files} files).");
-            } else {
-                println!(
-                    "Using Minecraft assets ({faces}/{total_faces} atlas faces, {files} files)."
-                );
-            }
-        }
-        Err(err) => {
-            let _ = fs::remove_dir_all(minecraft_dir());
-            eprintln!("Could not read the Minecraft jar ({err}) - using fallback colors.");
-            write_fallback_atlas(&assets_dir.join(&data.assets.atlas), &data);
-        }
-    }
-    let _ = progress.send(AssetProgress::Finished { rebuilt: true });
+    picked
 }
 
 struct Report {
-    files: usize,
     faces: usize,
 }
 
-fn build_assets(
-    jar_path: &Path,
-    assets_dir: &Path,
-    progress: &Sender<AssetProgress>,
-) -> Result<Report, Box<dyn std::error::Error>> {
+fn build_assets(jar_path: &Path, assets_dir: &Path) -> Result<Report, Box<dyn std::error::Error>> {
     let data = GameData::load();
     let mut jar = zip::ZipArchive::new(fs::File::open(jar_path)?)?;
     let staging_dir = minecraft_dir();
-    let files = extract_assets(&mut jar, &staging_dir, progress)?;
-    copy_required_assets(&staging_dir, assets_dir, &data)?;
+    tracing::info!("extracting Minecraft assets...");
+    let extracted_files = extract_assets(&mut jar, &staging_dir)?;
+    tracing::info!("extracted {extracted_files} files");
+    copy_model_files(&staging_dir, assets_dir, &data)?;
+    let block_textures = data
+        .blocks
+        .iter()
+        .map(|block| block_textures(assets_dir, block))
+        .collect::<Result<Vec<_>, _>>()?;
+    copy_required_assets(&staging_dir, assets_dir, &data, &block_textures)?;
 
     let texture_count = data.blocks.len() as u32 * data.assets.faces_per_block;
+    tracing::info!(
+        "building atlas ({} blocks, {}x{} pixels)...",
+        data.blocks.len(),
+        data.assets.tile_size,
+        data.assets.tile_size * texture_count
+    );
     let mut atlas =
         image::RgbaImage::new(data.assets.tile_size, data.assets.tile_size * texture_count);
     let mut faces = 0;
 
-    for (index, block) in data.blocks.iter().enumerate() {
-        let _ = progress.send(AssetProgress::BuildingAtlas {
-            current: index + 1,
-            total: data.blocks.len(),
-        });
+    for (index, (block, textures)) in data.blocks.iter().zip(&block_textures).enumerate() {
+        tracing::info!(
+            "building atlas: {}/{} ({})",
+            index + 1,
+            data.blocks.len(),
+            block.name
+        );
         let base = index as u32 * data.assets.faces_per_block;
-        let (tiles, extracted) = block_tiles(assets_dir, block, &data);
+        let (tiles, extracted) = block_tiles(assets_dir, block, textures, &data);
         for (offset, tile) in tiles.into_iter().enumerate() {
             image::imageops::overlay(
                 &mut atlas,
@@ -165,14 +152,15 @@ fn build_assets(
         faces += extracted;
     }
 
+    tracing::info!("saving atlas: {}", data.assets.atlas);
     atlas.save(assets_dir.join(&data.assets.atlas))?;
-    Ok(Report { files, faces })
+    tracing::info!("atlas built with {faces} faces");
+    Ok(Report { faces })
 }
 
 fn extract_assets(
     jar: &mut zip::ZipArchive<fs::File>,
     staging_dir: &Path,
-    progress: &Sender<AssetProgress>,
 ) -> Result<usize, Box<dyn std::error::Error>> {
     let _ = fs::remove_dir_all(staging_dir);
     fs::create_dir_all(staging_dir)?;
@@ -180,12 +168,6 @@ fn extract_assets(
     let total = jar.len();
     let mut count = 0;
     for index in 0..total {
-        if index % 256 == 0 || index + 1 == total {
-            let _ = progress.send(AssetProgress::Extracting {
-                current: index + 1,
-                total,
-            });
-        }
         let mut file = jar.by_index(index)?;
         let Some(path) = file.enclosed_name() else {
             continue;
@@ -211,114 +193,141 @@ fn copy_required_assets(
     staging_dir: &Path,
     assets_dir: &Path,
     data: &GameData,
+    block_textures: &[[String; 3]],
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut required = BTreeSet::new();
+    for textures in block_textures {
+        for texture in textures {
+            required.insert(texture.clone());
+        }
+    }
     for block in &data.blocks {
-        required.insert(format!("textures/block/{}.png", block.name));
-        required.insert(format!("textures/block/{}_top.png", block.name));
-        required.insert(format!("textures/block/{}_side.png", block.name));
-        required.insert(format!("textures/block/{}_side_overlay.png", block.name));
-        required.insert(format!("textures/block/{}_bottom.png", block.name));
-        if let Some(bottom) = &block.bottom {
-            required.insert(format!("textures/block/{bottom}.png"));
+        if block.grass_tint {
+            required.insert(format!("textures/block/{}_side_overlay.png", block.name));
         }
     }
     for path in data
         .assets
         .break_stage_textures
         .iter()
-        .chain(data.assets.crosshair_candidates.iter())
+        .chain(std::iter::once(&data.assets.crosshair))
     {
         required.insert(path.clone());
     }
 
+    let required_count = required.len();
+    let mut copied_count = 0;
     for relative in required {
         let target = assets_dir.join(&relative);
-        if target.is_file() {
-            fs::remove_file(&target)?;
-        }
         let source = staging_dir.join(&relative);
-        if !source.is_file() {
-            continue;
+        if source.is_file() {
+            if target.is_file() {
+                fs::remove_file(&target)?;
+            }
+            if let Some(parent) = target.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::rename(source, target)?;
+            copied_count += 1;
+            tracing::info!("copy assets/{relative}");
+        } else {
+            tracing::error!("copy assets/{relative}: missing in Minecraft jar");
         }
-        if let Some(parent) = target.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        fs::rename(source, target)?;
     }
+    tracing::info!("copied {copied_count}/{required_count} required assets");
     fs::remove_dir_all(staging_dir)?;
+    Ok(())
+}
+
+fn copy_model_files(
+    staging_dir: &Path,
+    assets_dir: &Path,
+    data: &GameData,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let target_dir = assets_dir.join("models").join("block");
+    let source_dir = staging_dir.join("models/block");
+    fs::create_dir_all(&target_dir)?;
+
+    for block in &data.blocks {
+        let filename = format!("{}.json", block.name);
+        let source = source_dir.join(&filename);
+        let target = target_dir.join(&filename);
+        fs::copy(&source, &target)?;
+        tracing::info!("copy assets/models/block/{filename}");
+    }
     Ok(())
 }
 
 fn block_tiles(
     assets_dir: &Path,
     block: &BlockDefinition,
+    textures: &[String; 3],
     data: &GameData,
 ) -> ([image::RgbaImage; 3], usize) {
-    let face_names = [
-        top_candidates(block),
-        side_candidates(block),
-        bottom_candidates(block),
-    ];
-
     let mut extracted = 0;
-    let mut tiles =
-        face_names.map(
-            |candidates| match read_texture(assets_dir, &candidates, data) {
-                Some(texture) => {
-                    extracted += 1;
-                    texture
-                }
-                None => {
-                    eprintln!("{}: {candidates:?} not found - fallback color.", block.name);
-                    fallback_tile(block, data.assets.tile_size)
-                }
-            },
-        );
+    let mut tiles = textures.each_ref().map(|texture| {
+        extracted += 1;
+        read_texture(assets_dir, texture)
+    });
 
     if block.grass_tint {
         tint_grass(&mut tiles[0], &data.assets.grass_tint);
-        let overlay_name = [format!("{}_side_overlay", block.name)];
-        if let Some(mut overlay) = read_texture(assets_dir, &overlay_name, data) {
-            tint_grass(&mut overlay, &data.assets.grass_tint);
-            image::imageops::overlay(&mut tiles[1], &overlay, 0, 0);
-        }
+        let overlay_name = format!("textures/block/{}_side_overlay.png", block.name);
+        let mut overlay = read_texture(assets_dir, &overlay_name);
+        tint_grass(&mut overlay, &data.assets.grass_tint);
+        image::imageops::overlay(&mut tiles[1], &overlay, 0, 0);
     }
 
     (tiles, extracted)
 }
 
-fn top_candidates(block: &BlockDefinition) -> Vec<String> {
-    vec![format!("{}_top", block.name), block.name.to_string()]
-}
-
-fn side_candidates(block: &BlockDefinition) -> Vec<String> {
-    vec![format!("{}_side", block.name), block.name.to_string()]
-}
-
-fn bottom_candidates(block: &BlockDefinition) -> Vec<String> {
-    match block.bottom {
-        Some(ref explicit) => vec![explicit.clone()],
-        None => vec![
-            format!("{}_bottom", block.name),
-            format!("{}_top", block.name),
-            block.name.to_string(),
-        ],
+fn read_texture(assets_dir: &Path, texture: &str) -> image::RgbaImage {
+    let path = assets_dir.join(texture);
+    if path.is_file() {
+        let bytes = fs::read(path).expect("Could not read texture");
+        return image::load_from_memory(&bytes)
+            .expect("Could not decode texture")
+            .to_rgba8();
     }
+    panic!("Texture does not exist: {}", display_path(&path));
 }
 
-fn read_texture(assets_dir: &Path, names: &[String], data: &GameData) -> Option<image::RgbaImage> {
-    for name in names {
-        let path = assets_dir
-            .join(&data.assets.texture_dir)
-            .join(format!("{name}.png"));
-        if let Ok(bytes) = fs::read(path)
-            && let Ok(texture) = image::load_from_memory(&bytes)
-        {
-            return Some(texture.to_rgba8());
-        }
-    }
-    None
+fn block_textures(
+    assets_dir: &Path,
+    block: &BlockDefinition,
+) -> Result<[String; 3], Box<dyn std::error::Error>> {
+    let path = assets_dir
+        .join("models/block")
+        .join(format!("{}.json", block.name));
+    tracing::info!("read model {}", display_path(&path));
+    let model: Value = serde_json::from_str(&fs::read_to_string(&path)?)?;
+    let textures = model
+        .get("textures")
+        .and_then(Value::as_object)
+        .ok_or_else(|| format!("Model has no textures: {}", display_path(&path)))?;
+    let top = model_texture(textures, &["up", "top", "end", "all"])?;
+    let side = model_texture(textures, &["side", "north", "all"])?;
+    let bottom = model_texture(textures, &["down", "bottom", "end", "all"])?;
+    Ok([top, side, bottom])
+}
+
+fn model_texture(
+    textures: &serde_json::Map<String, Value>,
+    names: &[&str],
+) -> Result<String, Box<dyn std::error::Error>> {
+    let value = names
+        .iter()
+        .find_map(|name| textures.get(*name))
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("Model is missing texture face: {}", names[0]))?;
+    let texture = value.strip_prefix("minecraft:").unwrap_or(value);
+    let texture = texture.strip_suffix(".png").unwrap_or(texture);
+    let texture = texture.strip_prefix("textures/").unwrap_or(texture);
+    Ok(format!("textures/{texture}.png"))
+}
+
+fn display_path(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
 }
 
 fn tint_grass(texture: &mut image::RgbaImage, tint: &[u8; 3]) {
@@ -327,47 +336,4 @@ fn tint_grass(texture: &mut image::RgbaImage, tint: &[u8; 3]) {
             pixel.0[channel] = (pixel.0[channel] as u16 * *value as u16 / 255) as u8;
         }
     }
-}
-
-fn fallback_tile(block: &BlockDefinition, tile_size: u32) -> image::RgbaImage {
-    let [r, g, b] = block.fallback;
-    image::RgbaImage::from_pixel(tile_size, tile_size, image::Rgba([r, g, b, 255]))
-}
-
-fn write_fallback_atlas(target: &Path, data: &GameData) {
-    let texture_count = data.blocks.len() as u32 * data.assets.faces_per_block;
-    let mut atlas =
-        image::RgbaImage::new(data.assets.tile_size, data.assets.tile_size * texture_count);
-
-    for (index, block) in data.blocks.iter().enumerate() {
-        let base = index as u32 * data.assets.faces_per_block;
-        let mut top = fallback_tile(block, data.assets.tile_size);
-        let mut side = fallback_tile(block, data.assets.tile_size);
-        let bottom = fallback_tile(block, data.assets.tile_size);
-        if block.grass_tint {
-            let [red, green, blue] = data.assets.grass_tint;
-            let green = image::Rgba([red, green, blue, 255]);
-            for pixel in top.pixels_mut() {
-                *pixel = green;
-            }
-            for y in 0..data.assets.grass_overlay_height {
-                for x in 0..data.assets.tile_size {
-                    side.put_pixel(x, y, green);
-                }
-            }
-        }
-        for (offset, tile) in [top, side, bottom].into_iter().enumerate() {
-            image::imageops::overlay(
-                &mut atlas,
-                &tile,
-                0,
-                ((base + offset as u32) * data.assets.tile_size) as i64,
-            );
-        }
-    }
-
-    if let Some(parent) = target.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
-    let _ = atlas.save(target);
 }

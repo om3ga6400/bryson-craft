@@ -1,4 +1,3 @@
-use crate::assets;
 use crate::data::GameData;
 use bevy::prelude::*;
 
@@ -22,25 +21,14 @@ pub fn spawn_crosshair(
         },
     ));
 
-    if let Some(crosshair) = assets::resolve(&data.assets.crosshair_candidates) {
-        root.with_child((
-            ImageNode::new(asset_server.load(crosshair)),
-            Node {
-                width: Val::Px(22.0),
-                height: Val::Px(22.0),
-                ..default()
-            },
-        ));
-    } else {
-        root.with_child((
-            Text::new("."),
-            TextFont {
-                font_size: FontSize::Px(24.0),
-                ..default()
-            },
-            TextColor(Color::srgba(1.0, 1.0, 1.0, 0.85)),
-        ));
-    }
+    root.with_child((
+        ImageNode::new(asset_server.load(data.assets.crosshair.clone())),
+        Node {
+            width: Val::Px(22.0),
+            height: Val::Px(22.0),
+            ..default()
+        },
+    ));
 }
 
 pub fn despawn_crosshair(mut commands: Commands, query: Query<Entity, With<Crosshair>>) {

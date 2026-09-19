@@ -2056,16 +2056,20 @@ dependencies = [
 
 [[package]]
 name = "bryson-craft"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "bevy",
  "bevy_voxel_world",
+ "encase_derive_impl",
  "image",
  "noise",
  "rand 0.10.2",
  "rfd",
  "serde",
  "serde_json",
+ "syn 2.0.119",
+ "tracing",
+ "tracing-subscriber",
  "zip",
 ]
 

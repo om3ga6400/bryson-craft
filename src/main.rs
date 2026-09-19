@@ -20,10 +20,9 @@ use player::interaction::{
 use player::physics::step_player_physics;
 use settings::{GameSettings, apply_window_mode};
 use ui::{
-    AssetLoadProgress, Paused, despawn_crosshair, despawn_main_menu, drive_asset_loading,
-    game_is_active, grab_cursor, handle_focus_change, handle_menu_buttons, handle_options_buttons,
-    handle_pause_buttons, manage_cursor, setup_main_menu, spawn_crosshair,
-    toggle_crosshair_visibility, toggle_pause,
+    Paused, despawn_crosshair, despawn_main_menu, game_is_active, grab_cursor, handle_focus_change,
+    handle_menu_buttons, handle_options_buttons, handle_pause_buttons, manage_cursor,
+    setup_main_menu, spawn_crosshair, toggle_crosshair_visibility, toggle_pause,
 };
 use world::{EditedVoxels, GameWorld, despawn_game_world, reset_edited_voxels, spawn_game_world};
 
@@ -45,6 +44,10 @@ fn show_window(mut window: Single<&mut Window, With<PrimaryWindow>>) {
     window.visible = true;
 }
 
+fn finish_asset_loading(mut next_state: ResMut<NextState<AppState>>) {
+    next_state.set(AppState::MainMenu);
+}
+
 pub fn enter_loading(
     game_world: Res<GameWorld>,
     settings: Res<GameSettings>,
@@ -61,9 +64,44 @@ pub fn enter_loading(
 }
 
 fn main() {
-    let game_data = data::GameData::load();
+    let game_data = tracing::subscriber::with_default(
+        tracing_subscriber::fmt().with_target(false).finish(),
+        || {
+            let data_folder_exists = data::data_folder_exists();
+            if data_folder_exists {
+                tracing::info!("find data folder success");
+            } else {
+                tracing::warn!("find data folder failure");
+            }
+            if !data_folder_exists {
+                data::ensure_data_files();
+            }
 
-    assets::ensure_atlas_exists();
+            tracing::info!("validating data...");
+            let mut data_valid = data::data_files_are_valid();
+            if !data_valid {
+                data::ensure_data_files();
+                tracing::info!("validating data...");
+                let downloaded_data_valid = data::data_files_are_valid();
+                assert!(downloaded_data_valid, "Downloaded data files are invalid");
+                data_valid = downloaded_data_valid;
+            }
+            tracing::info!(
+                "validate data {}",
+                if data_valid { "success" } else { "failure" }
+            );
+
+            let game_data = data::GameData::load();
+            if assets::assets_folder_exists() {
+                tracing::info!("find asset folder success");
+            } else {
+                tracing::warn!("find asset folder failure");
+            }
+            assets::ensure_assets(&game_data);
+            tracing::info!("launching game...");
+            game_data
+        },
+    );
 
     App::new()
         .add_plugins((
@@ -88,12 +126,11 @@ fn main() {
         .init_resource::<Paused>()
         .init_resource::<BlockBreakProgress>()
         .init_resource::<EditedVoxels>()
-        .init_resource::<AssetLoadProgress>()
         .insert_resource(ClearColor(Color::srgb(0.12, 0.12, 0.12)))
         .add_systems(Startup, configure_gizmos)
         .add_systems(
             Update,
-            drive_asset_loading.run_if(in_state(AppState::AssetLoading)),
+            finish_asset_loading.run_if(in_state(AppState::AssetLoading)),
         )
         .add_systems(
             OnEnter(AppState::MainMenu),

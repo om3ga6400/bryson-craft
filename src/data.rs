@@ -5,13 +5,21 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+const DATA_FILES: [&str; 7] = [
+    "assets.json",
+    "blocks.json",
+    "camera.json",
+    "player.json",
+    "settings.json",
+    "simulation.json",
+    "terrain.json",
+];
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct BlockDefinition {
     pub name: String,
     #[serde(default)]
     pub grass_tint: bool,
-    pub bottom: Option<String>,
-    pub fallback: [u8; 3],
     #[serde(default = "default_break_duration")]
     pub break_duration: f32,
     #[serde(default)]
@@ -23,10 +31,8 @@ pub struct AssetDefinition {
     pub atlas: String,
     pub tile_size: u32,
     pub faces_per_block: u32,
-    pub texture_dir: String,
     pub grass_tint: [u8; 3],
-    pub grass_overlay_height: u32,
-    pub crosshair_candidates: Vec<String>,
+    pub crosshair: String,
     pub break_stage_textures: Vec<String>,
 }
 
@@ -133,10 +139,62 @@ impl GameData {
     }
 
     pub fn block(&self, id: u8) -> &BlockDefinition {
-        self.blocks
-            .get(id as usize)
-            .unwrap_or_else(|| &self.blocks[0])
+        &self.blocks[id as usize]
     }
+}
+
+pub fn ensure_data_files() {
+    let directory = data_dir();
+    fs::create_dir_all(&directory).expect("Could not create data directory");
+
+    for filename in DATA_FILES {
+        let path = directory.join(filename);
+        if path.is_file() {
+            tracing::info!("data/{filename}: already present");
+            continue;
+        }
+
+        let url = format!(
+            "https://raw.githubusercontent.com/om3ga6400/bryson-craft/main/data/{filename}"
+        );
+        let status = std::process::Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                &format!(
+                    "Invoke-WebRequest -UseBasicParsing -Uri '{}' -OutFile '{}'",
+                    url,
+                    path.display()
+                ),
+            ])
+            .status()
+            .unwrap_or_else(|error| panic!("Could not download {filename}: {error}"));
+        assert!(status.success(), "Could not download {filename}");
+        tracing::info!("data/{filename}: downloaded");
+    }
+}
+
+pub fn data_folder_exists() -> bool {
+    data_dir().is_dir()
+}
+
+pub fn data_files_are_valid() -> bool {
+    let directory = data_dir();
+    let mut valid = true;
+    for filename in DATA_FILES {
+        let file_valid = fs::read_to_string(directory.join(filename))
+            .ok()
+            .and_then(|contents| serde_json::from_str::<serde_json::Value>(&contents).ok())
+            .is_some();
+        if file_valid {
+            tracing::info!("validation success data/{filename}");
+        } else {
+            tracing::error!("validation failure data/{filename}");
+        }
+        valid &= file_valid;
+    }
+    valid
 }
 
 impl GameData {
@@ -233,16 +291,7 @@ impl GameData {
 }
 
 fn data_dir() -> PathBuf {
-    let root = std::env::var_os("BEVY_ASSET_ROOT")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("CARGO_MANIFEST_DIR").map(PathBuf::from))
-        .or_else(|| {
-            std::env::current_exe()
-                .ok()
-                .and_then(|exe| exe.parent().map(PathBuf::from))
-        })
-        .unwrap_or_else(|| PathBuf::from("."));
-    root.join("data")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("data")
 }
 
 fn load_file<T: DeserializeOwned>(directory: &Path, filename: &str) -> T {

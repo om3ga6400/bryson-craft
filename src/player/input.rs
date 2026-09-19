@@ -1,6 +1,7 @@
 use crate::data::GameData;
 use crate::player::{Player, PlayerState};
 use crate::settings::GameSettings;
+use crate::ui::Paused;
 use bevy::input::mouse::AccumulatedMouseMotion;
 use bevy::prelude::*;
 
@@ -69,6 +70,7 @@ pub fn mouse_look(
 pub fn sync_camera(
     player: Single<(&Transform, &PlayerState), With<Player>>,
     mut camera_transform: Single<&mut Transform, (With<Camera3d>, Without<Player>)>,
+    paused: Res<Paused>,
     settings: Res<GameSettings>,
     data: Res<GameData>,
     fixed_time: Res<Time<Fixed>>,
@@ -81,9 +83,13 @@ pub fn sync_camera(
         data.player.eye_height
     };
 
-    let render_position = player_state
-        .prev_position
-        .lerp(player_transform.translation, fixed_time.overstep_fraction());
+    let render_position = if paused.0 {
+        player_transform.translation
+    } else {
+        player_state
+            .prev_position
+            .lerp(player_transform.translation, fixed_time.overstep_fraction())
+    };
 
     camera_transform.translation = render_position + Vec3::Y * eye_height;
     camera_transform.rotation =

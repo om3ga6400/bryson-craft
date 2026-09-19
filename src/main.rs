@@ -1,5 +1,3 @@
-#![allow(clippy::type_complexity, clippy::too_many_arguments)]
-
 mod assets;
 mod data;
 mod player;

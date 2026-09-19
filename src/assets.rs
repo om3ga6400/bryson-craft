@@ -10,7 +10,7 @@ pub fn assets_dir() -> PathBuf {
     project_root().join("assets")
 }
 
-pub fn minecraft_dir() -> PathBuf {
+fn minecraft_dir() -> PathBuf {
     project_root().join("minecraft")
 }
 

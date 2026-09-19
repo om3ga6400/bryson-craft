@@ -2,7 +2,6 @@
   {
     "name": "grass_block",
     "grass_tint": true,
-    "bottom": "dirt",
     "break_duration": 0.75,
     "hotbar_key": 1
   },

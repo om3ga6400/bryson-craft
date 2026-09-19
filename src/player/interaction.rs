@@ -15,6 +15,7 @@ pub struct BlockBreakProgress {
 #[derive(Component)]
 pub struct BreakOverlay {
     stage: usize,
+    textures: Vec<Handle<Image>>,
 }
 
 pub fn spawn_break_overlay(
@@ -24,13 +25,19 @@ pub fn spawn_break_overlay(
     asset_server: Res<AssetServer>,
     data: Res<GameData>,
 ) {
+    let textures: Vec<Handle<Image>> = data
+        .assets
+        .break_stage_textures
+        .iter()
+        .map(|path| asset_server.load(path.clone()))
+        .collect();
+    let initial_texture = textures[0].clone();
+
     commands.spawn((
-        BreakOverlay { stage: 0 },
+        BreakOverlay { stage: 0, textures },
         Mesh3d(meshes.add(Cuboid::new(1.0, 1.0, 1.0))),
         MeshMaterial3d(materials.add(StandardMaterial {
-            base_color_texture: Some(
-                asset_server.load(data.assets.break_stage_textures[0].clone()),
-            ),
+            base_color_texture: Some(initial_texture),
             alpha_mode: AlphaMode::Mask(0.99),
             ..default()
         })),
@@ -161,7 +168,7 @@ pub fn block_outline(
 pub fn update_break_overlay(
     break_progress: Res<BlockBreakProgress>,
     voxel_world: VoxelWorld<GameWorld>,
-    asset_server: Res<AssetServer>,
+    images: Res<Assets<Image>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut overlay: Single<(
         &mut MeshMaterial3d<StandardMaterial>,
@@ -185,10 +192,12 @@ pub fn update_break_overlay(
     transform.translation = target.as_vec3() + Vec3::splat(0.5);
     **visibility = Visibility::Visible;
     if state.stage != stage {
-        state.stage = stage;
-        if let Some(mut material) = materials.get_mut(&material_handle.0) {
-            material.base_color_texture =
-                Some(asset_server.load(data.assets.break_stage_textures[stage].clone()));
+        let texture = state.textures[stage].clone();
+        if images.get(&texture).is_some() {
+            state.stage = stage;
+            if let Some(mut material) = materials.get_mut(&material_handle.0) {
+                material.base_color_texture = Some(texture.clone());
+            }
         }
     }
 }
